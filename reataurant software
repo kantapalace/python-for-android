@@ -1,0 +1,241 @@
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+from kivy.uix.button import Button
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.popup import Popup
+from kivy.core.window import Window
+import sqlite3
+
+# Set window size for mobile-friendly display
+Window.size = (360, 640)
+
+# Database setup
+def setup_database():
+    conn = sqlite3.connect('restaurant_inventory.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS inventory
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  item_name TEXT NOT NULL,
+                  quantity INTEGER NOT NULL,
+                  price REAL NOT NULL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (username TEXT PRIMARY KEY,
+                  password TEXT NOT NULL,
+                  role TEXT NOT NULL)''')
+    c.execute("INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)",
+              ('admin', 'admin123', 'admin'))
+    c.execute("INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)",
+              ('staff', 'staff123', 'staff'))
+    conn.commit()
+    conn.close()
+
+# Main App
+class InventoryApp(App):
+    def build(self):
+        self.current_user = None
+        self.current_role = None
+        setup_database()
+        return LoginScreen()
+
+# Login Screen
+class LoginScreen(BoxLayout):
+    def _init_(self, **kwargs):
+        super()._init_(**kwargs)
+        self.orientation = 'vertical'
+        self.padding = 10
+        self.spacing = 10
+
+        self.add_widget(Label(text='Restaurant Inventory Login', font_size=24))
+        self.add_widget(Label(text='Username'))
+        self.username = TextInput(multiline=False)
+        self.add_widget(self.username)
+        self.add_widget(Label(text='Password'))
+        self.password = TextInput(multiline=False, password=True)
+        self.add_widget(self.password)
+        login_btn = Button(text='Login', size_hint=(1, 0.2))
+        login_btn.bind(on_press=self.login)
+        self.add_widget(login_btn)
+
+    def login(self, instance):
+        username = self.username.text
+        password = self.password.text
+        conn = sqlite3.connect('restaurant_inventory.db')
+        c = conn.cursor()
+        c.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, password))
+        user = c.fetchone()
+        conn.close()
+
+        if user:
+            App.get_running_app().current_user = username
+            App.get_running_app().current_role = user[2]
+            App.get_running_app().root.clear_widgets()
+            App.get_running_app().root.add_widget(InventoryScreen())
+        else:
+            popup = Popup(title='Error', content=Label(text='Invalid username or password'),
+                          size_hint=(0.8, 0.4))
+            popup.open()
+
+# Inventory Screen
+class InventoryScreen(BoxLayout):
+    def _init_(self, **kwargs):
+        super()._init_(**kwargs)
+        self.orientation = 'vertical'
+        self.padding = 10
+        self.spacing = 10
+
+        self.add_widget(Label(text=f'Welcome, {App.get_running_app().current_user} ({App.get_running_app().current_role})', font_size=20))
+        
+        # Input form
+        self.item_name = TextInput(hint_text='Item Name', multiline=False)
+        self.add_widget(self.item_name)
+        self.quantity = TextInput(hint_text='Quantity', multiline=False)
+        self.add_widget(self.quantity)
+        self.price = TextInput(hint_text='Price', multiline=False)
+        self.add_widget(self.price)
+        
+        add_btn = Button(text='Add Item', size_hint=(1, 0.2))
+        add_btn.bind(on_press=self.add_item)
+        self.add_widget(add_btn)
+
+        if App.get_running_app().current_role == 'admin':
+            edit_btn = Button(text='Edit Selected Item', size_hint=(1, 0.2))
+            edit_btn.bind(on_press=self.edit_item)
+            self.add_widget(edit_btn)
+            delete_btn = Button(text='Delete Selected Item', size_hint=(1, 0.2))
+            delete_btn.bind(on_press=self.delete_item)
+            self.add_widget(delete_btn)
+
+        logout_btn = Button(text='Logout', size_hint=(1, 0.2))
+        logout_btn.bind(on_press=self.logout)
+        self.add_widget(logout_btn)
+
+        # Inventory display
+        scroll = ScrollView()
+        self.grid = GridLayout(cols=4, size_hint_y=None, height=400, spacing=5, padding=5)
+        self.grid.bind(minimum_height=selfzige = 400, spacing=5, padding=5)
+        self.grid.bind(minimum_height=self.grid.setter('height'))
+        self.grid.add_widget(Label(text='ID'))
+        self.grid.add_widget(Label(text='Item Name'))
+        self.grid.add_widget(Label(text='Quantity'))
+        self.grid.add_widget(Label(text='Price'))
+        scroll.add_widget(self.grid)
+        self.add_widget(scroll)
+        self.load_inventory()
+
+    def load_inventory(self):
+        for child in self.grid.children[:]:
+            if not isinstance(child, Label) or child.text not in ['ID', 'Item Name', 'Quantity', 'Price']:
+                self.grid.remove_widget(child)
+
+        conn = sqlite3.connect('restaurant_inventory.db')
+        c = conn.cursor()
+        c.execute("SELECT * FROM inventory")
+        for row in c.fetchall():
+            for item in row:
+                lbl = Label(text=str(item), size_hint_y=None, height=30)
+                lbl.bind(on_touch_down=self.select_item)
+                self.grid.add_widget(lbl)
+        conn.close()
+
+    def select_item(self, instance, touch):
+        if instance.collide_point(*touch.pos) and App.get_running_app().current_role == 'admin':
+            for child in self.grid.children:
+                child.color = (1, 1, 1, 1)
+            instance.color = (0, 1, 0, 1)
+            self.selected_id = instance.text if instance.text.isdigit() else None
+
+    def add_item(self, instance):
+        item_name = self.item_name.text
+        try:
+            quantity = int(self.quantity.text)
+            price = float(self.price.text)
+        except ValueError:
+            popup = Popup(title='Error', content=Label(text='Quantity and Price must be valid numbers'),
+                          size_hint=(0.8, 0.4))
+            popup.open()
+            return
+
+        if item_name and quantity >= 0 and price >= 0:
+            conn = sqlite3.connect('restaurant_inventory.db')
+            c = conn.cursor()
+            c.execute("INSERT INTO inventory (item_name, quantity, price) VALUES (?, ?, ?)",
+                      (item_name, quantity, price))
+            conn.commit()
+            conn.close()
+            self.load_inventory()
+            self.item_name.text = ''
+            self.quantity.text = ''
+            self.price.text = ''
+        else:
+            popup = Popup(title='Error', content=Label(text='Please fill all fields correctly'),
+                          size_hint=(0.8, 0.4))
+            popup.open()
+
+    def edit_item(self, instance):
+        if App.get_running_app().current_role != 'admin':
+            popup = Popup(title='Error', content=Label(text='Only admins can edit items'),
+                          size_hint=(0.8, 0.4))
+            popup.open()
+            return
+
+        if not hasattr(self, 'selected_id') or not self.selected_id:
+            popup = Popup(title='Error', content=Label(text='Please select an item to edit'),
+                          size_hint=(0.8, 0.4))
+            popup.open()
+            return
+
+        item_name = self.item_name.text
+        try:
+            quantity = int(self.quantity.text)
+            price = float(self.price.text)
+        except ValueError:
+            popup = Popup(title='Error', content=Label(text='Quantity and Price must be valid numbers'),
+                          size_hint=(0.8, 0.4))
+            popup.open()
+            return
+
+        if item_name and quantity >= 0 and price >= 0:
+            conn = sqlite3.connect('restaurant_inventory.db')
+            c = conn.cursor()
+            c.execute("UPDATE inventory SET item_name = ?, quantity = ?, price = ? WHERE id = ?",
+                      (item_name, quantity, price, self.selected_id))
+            conn.commit()
+            conn.close()
+            self.load_inventory()
+            self.item_name.text = ''
+            self.quantity.text = ''
+            self.price.text = ''
+        else:
+            popup = Popup(title='Error', content=Label(text='Please fill all fields correctly'),
+                          size_hint=(0.8, 0.4))
+            popup.open()
+
+    def delete_item(self, instance):
+        if App.get_running_app().current_role != 'admin':
+            popup = Popup(title='Error', content=Label(text='Only admins can delete items'),
+                          size_hint=(0.8, 0.4))
+            popup.open()
+            return
+
+        if not hasattr(self, 'selected_id') or not self.selected_id:
+            popup = Popup(title='Error', content=Label(text='Please select an item to delete'),
+                          size_hint=(0.8, 0.4))
+            popup.open()
+            return
+
+        conn = sqlite3.connect('restaurant_inventory.db')
+        c = conn.cursor()
+        c.execute("DELETE FROM inventory WHERE id = ?", (self.selected_id,))
+        conn.commit()
+        conn.close()
+        self.load_inventory()
+
+    def logout(self, instance):
+        App.get_running_app().root.clear_widgets()
+        App.get_running_app().root.add_widget(LoginScreen())
+
+if _name_ == '_main_':
+    InventoryApp().run()
